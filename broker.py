@@ -93,10 +93,10 @@ class Tradier(Broker):
         return complete_url
 
     @property
-    async def positions(self) -> List[Position]:
+    def positions(self) -> List[Position]:
 
-        async with httpx.Client() as client:
-            response = await client.get(
+        with httpx.Client() as client:
+            response = client.get(
                 url=self._form_url('/accounts/[[account]]/positions/'),
                 headers=self._headers
             )
