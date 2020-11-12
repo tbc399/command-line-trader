@@ -19,9 +19,9 @@ class Position(BaseModel):
 
     def __eq__(self, other):
         if isinstance(other, Position):
-            return self.name == other.name
+            return self.name.lower() == other.name.lower()
         elif isinstance(other, str):
-            return self.name == other
+            return self.name.lower() == other.lower()
 
 
 class OrderStatus(Enum):
@@ -88,11 +88,11 @@ class Broker(ABC):
         self._account_number = account_number
 
     @abstractmethod
-    async def place_market_sell(self, position: Position):
+    async def place_market_sell(self, name: str, quantity: int):
         pass
 
     @abstractmethod
-    async def place_market_buy(self, position: Position):
+    async def place_market_buy(self, name: str, quantity: int):
         pass
     
     @property
@@ -151,18 +151,25 @@ class Tradier(Broker):
 
         return complete_url
 
-    async def _place_order(self, position: Position, side: str):
+    async def _place_order(
+                self,
+                name: str,
+                quantity: int,
+                side: str,
+                order_type: str = 'market',
+                stop_price: float = None) -> str:
     
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 url=self._form_url('/accounts/[[account]]/orders'),
                 data={
                     'class': 'equity',
-                    'symbol': position.name,
+                    'symbol': name,
                     'side': side,
-                    'quantity': position.size,
-                    'type': 'market',
-                    'duration': 'day'
+                    'quantity': quantity,
+                    'type': order_type,
+                    'duration': 'gtc',
+                    'stop': stop_price
                 },
                 headers=self._headers
             )
@@ -170,27 +177,30 @@ class Tradier(Broker):
         if response.status_code != codes.OK:
             raise IOError(
                 f'failed to place market {side} order from Tradier '
-                f'for {position.name} with a status code of'
+                f'for {name} with a status code of'
                 f' {response.status_code}: {response.text}'
             )
     
         return response.json()['order']['id']
 
-    async def place_market_sell(self, position: Position):
-        return await self._place_order(position, 'sell')
+    async def place_market_sell(self, name: str, quantity: int) -> str:
+        return await self._place_order(name, quantity, 'sell')
 
-    async def place_market_buy(self, position: Position):
-        return await self._place_order(position, 'buy')
+    async def place_market_buy(self, name: str, quantity: int) -> str:
+        return await self._place_order(name, quantity, 'buy')
+    
+    async def place_stop_loss(self, name: str, quantity: int, price: float):
+        return await self._place_order(name, quantity, 'sell', 'stop', price)
     
     @property
-    def account_balance(self) -> AccountBalance:
+    async def account_balance(self) -> AccountBalance:
     
-        with httpx.Client() as client:
-            response = client.get(
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
                 url=self._form_url('/accounts/[[account]]/balances/'),
                 headers=self._headers
             )
-    
+
         if response.status_code != httpx.codes.OK:
             raise IOError(
                 f'failed to get account balance for account '
@@ -208,14 +218,14 @@ class Tradier(Broker):
         )
     
     @property
-    def positions(self) -> List[Position]:
+    async def positions(self) -> List[Position]:
 
-        with httpx.Client() as client:
-            response = client.get(
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
                 url=self._form_url('/accounts/[[account]]/positions/'),
                 headers=self._headers
             )
-
+        
         if response.status_code != httpx.codes.OK:
             raise IOError(
                 f'failed to get account positions for account '
@@ -256,32 +266,15 @@ class Tradier(Broker):
                 )
             ]
 
-    def get_quote(self, name: str) -> Quote:
+    async def get_quote(self, name: str) -> Quote:
     
-        with httpx.Client() as client:
-            response = client.get(
-                url=self._form_url('/markets/quotes/'),
-                params=dict(symbols=name, greeks=False),
-                headers = self._headers
-            )
-    
-        if response.status_code != codes.OK:
-            raise IOError(
-                f'failed to get quote from Tradier for symbol(s) {name} '
-                f'with a status code of {response.status_code}: {response.text}'
-            )
-    
-        quote_object = response.json()['quotes']['quote']
-    
-        return Quote(
-            name=quote_object['symbol'],
-            price=float(quote_object['last'])
-        )
+        quotes = await self.get_quotes([name])
+        return quotes[0]
 
-    def get_quotes(self, names: Collection[str]) -> List[Quote]:
-    
-        with httpx.Client() as client:
-            response = client.get(
+    async def get_quotes(self, names: Collection[str]) -> List[Quote]:
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
                 url=self._form_url('/markets/quotes/'),
                 params=dict(symbols=','.join(names), greeks=False),
                 headers=self._headers
@@ -289,15 +282,47 @@ class Tradier(Broker):
     
         if response.status_code != codes.OK:
             raise IOError(
-                f'failed to get quotes from Tradier for symbols {names} '
+                f'failed to get quotes from Tradier for symbol(s) {names} '
                 f'with a status code of {response.status_code}: {response.text}'
             )
     
-        quote_objects = response.json()['quotes']['quote']
+        quotes = response.json()['quotes']['quote']
+        
+        if isinstance(quotes, list):
+            return [
+                Quote(
+                    name=quote['symbol'],
+                    price=float(quote['last'])
+                ) for quote in quotes
+            ]
+        else:
+            return [Quote(
+                name=quotes['symbol'],
+                price=float(quotes['last'])
+            )]
+
+    async def order_status(self, order_id: str) -> Order:
     
-        return [
-            Quote(
-                name=quote_object['symbol'],
-                price=float(quote_object['last'])
-            ) for quote_object in quote_objects
-        ]
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url=self._form_url(f'/accounts/[[account]]/orders/{order_id}'),
+                headers=self._headers
+            )
+    
+        if response.status_code != httpx.codes.OK:
+            raise IOError(
+                f'failed to get order status for order {order_id} '
+                f'{self._account_number} with a status code of '
+                f'{response.status_code}: {response.text}'
+            )
+    
+        order = response.json()['order']
+    
+        return Order(
+            id=order_id,
+            name=order['symbol'],
+            side=order['side'],
+            status=OrderStatus(order['status']),
+            executed_quantity=int(float(order['exec_quantity'])),
+            avg_fill_price=float(order['avg_fill_price'])
+        )
