@@ -59,10 +59,12 @@ class AccountBalance:
             total_cash: float,
             total_equity: float,
             open_pl: float,
+            long_value: float,
             settled_cash: float):
         self._total_cash = total_cash
         self._total_equity = total_equity
         self._open_pl = open_pl
+        self._long_value = long_value
         self._settled_cash = settled_cash
 
     @property
@@ -76,6 +78,10 @@ class AccountBalance:
     @property
     def open_pl(self):
         return self._open_pl
+    
+    @property
+    def long_value(self):
+        return self._long_value
 
     @property
     def settled_cash(self):
@@ -158,19 +164,23 @@ class Tradier(Broker):
                 side: str,
                 order_type: str = 'market',
                 stop_price: float = None) -> str:
-    
+        
+        payload = {
+            'class': 'equity',
+            'symbol': name,
+            'side': side,
+            'quantity': quantity,
+            'type': order_type,
+            'duration': 'gtc'
+        }
+        
+        if order_type in ('stop', 'stop_limit'):
+            payload['stop'] = stop_price
+        
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 url=self._form_url('/accounts/[[account]]/orders'),
-                data={
-                    'class': 'equity',
-                    'symbol': name,
-                    'side': side,
-                    'quantity': quantity,
-                    'type': order_type,
-                    'duration': 'gtc',
-                    'stop': stop_price
-                },
+                data=payload,
                 headers=self._headers
             )
     
@@ -214,6 +224,7 @@ class Tradier(Broker):
             total_cash=balances['total_cash'],
             total_equity=balances['total_equity'],
             open_pl=balances['open_pl'],
+            long_value=balances['long_market_value'],
             settled_cash=balances['cash']['cash_available']
         )
     

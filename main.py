@@ -20,21 +20,26 @@ def coro(f):
     return wrapper
 
 
-async def spinning_cursor(coro_, info: str = None):
+async def wait_n_spin(coroutine, info: str, persist: bool = True):
     
-    task = asyncio.create_task(coro_)
+    task = asyncio.ensure_future(coroutine)
     
-    spinner = itertools.cycle([cyan('|'), cyan('/'), cyan('-'), cyan('\\')])
-    
+    spinner = itertools.cycle(['|', '/', '-', '\\'])
+
     while not task.done():
-        sys.stdout.write(f'{info} ')
-        sys.stdout.write(next(spinner))
+        sys.stdout.write('\r')
+        sys.stdout.write(f'{info} {cyan(next(spinner))} ')
         sys.stdout.flush()
         await asyncio.sleep(0.1)
-        sys.stdout.write('\r')
         
-    sys.stdout.write(f'{info} '+green('\u2714')+'\n')
-    
+    if persist:
+        sys.stdout.write('\r')
+        sys.stdout.write(f'{info}  \n')
+    else:
+        sys.stdout.write('\r')
+        sys.stdout.write(' ' * len(f'{info} {cyan(next(spinner))} '))
+        sys.stdout.write('\r')
+
     return task.result()
 
 
@@ -88,6 +93,7 @@ async def _wait_for_pending_orders(pending_order_ids, broker):
             broker.order_status(order_id)
             for order_id in pending_order_ids
         ])
+        
         for order in orders:
             if order.status == br.OrderStatus.FILLED:
                 pending_order_ids.remove(order.id)
@@ -114,12 +120,20 @@ async def list_():
         access_token='ey39F8VMeFvhNsq4vavzeQXThcpL'
     )
     
-    positions, account = await asyncio.gather(
-        broker.positions,
-        broker.account_balance
+    positions, account = await wait_n_spin(
+        asyncio.gather(
+            broker.positions,
+            broker.account_balance
+        ),
+        'loading',
+        persist=False
     )
     
-    quotes = await broker.get_quotes([x.name for x in positions])
+    quotes = await wait_n_spin(
+        broker.get_quotes([x.name for x in positions]),
+        'loading',
+        persist=False
+    )
     
     now = datetime.utcnow()
     
@@ -203,15 +217,15 @@ async def enter(name, allocation, stop_loss, preview):
             click.echo(f'Stop loss @ {stop_price:.2f} ({stop_loss}%)')
         click.confirm('Continue?', abort=True)
 
-    click.echo(f'placing market order: '+green('\u2713'))
+    click.echo('placing market order')
     order_id = await broker.place_market_buy(name, allocation_quantity)
     
-    async for order in _wait_for_pending_orders({order_id}, broker):
+    async for order in _wait_for_pending_orders({str(order_id)}, broker):
         if order.status != br.OrderStatus.FILLED:
             click.echo(f'could not place market order: {order.status}')
             return
         else:
-            click.echo('market order filled: \u2713')
+            click.echo('market order filled')
     
     if stop_loss:
         stop_price = quote.price * ((100 - stop_loss) / 100)
@@ -242,12 +256,54 @@ async def adjust(name):
     click.echo('adjust position')
     
     async def do_something():
-        await asyncio.sleep(5)
+        await asyncio.sleep(1)
         return 34*93
     
-    result = await spinning_cursor(do_something(), 'doing something')
+    result = await wait_n_spin(do_something(), 'doing something', persist=False)
     
     click.echo(result)
+    
+    
+@cli.group(invoke_without_command=True)
+@click.pass_context
+@coro
+async def account(ctx):
+    
+    if ctx.invoked_subcommand is not None:
+        return
+
+    broker = br.Tradier(
+        '6YA05267',
+        access_token='ey39F8VMeFvhNsq4vavzeQXThcpL'
+    )
+
+    balances = await wait_n_spin(
+        broker.account_balance,
+        'loading',
+        persist=False
+    )
+    
+    click.echo('')
+    open_pl_percentage = (balances.open_pl /
+                          (balances.total_equity - balances.open_pl)) * 100
+    click.echo(
+        tabulate(
+            [[
+                balances.total_equity,
+                balances.long_value,
+                green(open_pl_percentage) if open_pl_percentage > 0
+                else red(open_pl_percentage)
+            ]],
+            headers=[
+                f'Total Equity',
+                'Long Value',
+                'Open P/L (%)',
+            ],
+            tablefmt='fancy_grid',
+            floatfmt=',.2f'
+        )
+    )
+    click.echo('')
 
 
 if __name__ == '__main__':
