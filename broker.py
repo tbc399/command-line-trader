@@ -1,18 +1,21 @@
 import httpx
+import asyncio
+import pandas
 
 from abc import ABC, abstractmethod
 from enum import Enum
 from httpx import codes
-from typing import Collection, List
+from typing import Collection, List, Tuple
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timedelta
+from collections import defaultdict
 
 
 class Position(BaseModel):
     name: str
     size: int
     cost_basis: float
-    time_acquired: datetime
+    time_opened: datetime
 
     def __hash__(self):
         return hash(self.name)
@@ -23,6 +26,11 @@ class Position(BaseModel):
         elif isinstance(other, str):
             return self.name.lower() == other.lower()
 
+
+class ClosedPosition(Position):
+    proceeds: float
+    time_closed: datetime
+    
 
 class OrderStatus(Enum):
     OPEN = 'open'
@@ -42,6 +50,7 @@ class Order(BaseModel):
     id: str
     name: str
     side: str
+    type: str
     status: OrderStatus
     executed_quantity: int
     avg_fill_price: float
@@ -88,6 +97,59 @@ class AccountBalance:
         return self._settled_cash
 
 
+class ReturnStream:
+    
+    def __init__(
+            self,
+            initial: float,
+            closed_positions: List[ClosedPosition],
+            admin_adjustments: List[Tuple[datetime, float]]):
+        
+        self._initial = initial
+        
+        position_gains = [
+            (
+                x.time_closed,
+                x.proceeds - x.cost_basis
+            ) for x in closed_positions
+        ]
+        
+        grouped_dollar_gains = defaultdict(float)
+        for dt, gl in position_gains:# + admin_adjustments:
+            grouped_dollar_gains[dt.date()] += gl
+            
+        self._gains = sorted(grouped_dollar_gains.items(), key=lambda x: x[0])
+        
+    @staticmethod
+    def __percent_change(start, end):
+        return ((end - start) / start) * 100
+        
+    @property
+    def total_return(self) -> float:
+        return ReturnStream.__percent_change(
+            self._initial,
+            sum(x[1] for x in self._gains)
+        )
+    
+    @property
+    def ytd_return(self) -> float:
+        current_year = datetime.utcnow().year
+        starting_amount = sum(x[1] for x in self._gains if x[0].year < current_year)
+        current_amount = sum(x[1] for x in self._gains)
+        return ReturnStream.__percent_change(starting_amount, current_amount)
+    
+    @property
+    def returns(self) -> Collection[Tuple[datetime, float]]:
+        last_value = self._initial
+        percentage_returns = []
+        for dt, gl in self._gains:
+            print(dt, last_value)
+            rtn = ReturnStream.__percent_change(self._initial, last_value + gl)
+            percentage_returns.append((dt, rtn))
+            last_value += gl
+        return percentage_returns
+    
+
 class Broker(ABC):
 
     def __init__(self, account_number: str):
@@ -118,7 +180,25 @@ class Broker(ABC):
     @abstractmethod
     async def account_balance(self) -> AccountBalance:
         pass
- 
+    
+    @property
+    @abstractmethod
+    async def orders(self) -> Collection[Order]:
+        pass
+
+    @abstractmethod
+    async def cancel_order(self, order_id):
+        pass
+
+    @property
+    @abstractmethod
+    async def account_returns(self) -> ReturnStream:
+        pass
+    
+    @abstractmethod
+    async def history(self, name: str):
+        pass
+
 
 class Tradier(Broker):
 
@@ -256,7 +336,7 @@ class Tradier(Broker):
                     name=pos['symbol'],
                     size=pos['quantity'],
                     cost_basis=pos['cost_basis'],
-                    time_acquired=datetime.strptime(
+                    time_opened=datetime.strptime(
                         pos['date_acquired'],
                         '%Y-%m-%dT%H:%M:%S.%fZ'
                     )
@@ -333,7 +413,160 @@ class Tradier(Broker):
             id=order_id,
             name=order['symbol'],
             side=order['side'],
+            type=order['type'],
             status=OrderStatus(order['status']),
             executed_quantity=int(float(order['exec_quantity'])),
             avg_fill_price=float(order['avg_fill_price'])
         )
+    
+    @property
+    async def orders(self) -> Collection[Order]:
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url=self._form_url(f'/accounts/[[account]]/orders'),
+                headers=self._headers
+            )
+
+        if response.status_code != httpx.codes.OK:
+            raise IOError(
+                f'failed to get orders with a status code of '
+                f'{response.status_code}: {response.text}'
+            )
+
+        orders = response.json()['orders']['order']
+
+        return [
+            Order(
+                id=order['id'],
+                name=order['symbol'],
+                side=order['side'],
+                type=order['type'],
+                status=OrderStatus(order['status']),
+                executed_quantity=int(float(order['exec_quantity'])),
+                avg_fill_price=float(order['avg_fill_price'])
+            ) for order in orders
+        ]
+    
+    async def cancel_order(self, order_id):
+    
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                url=self._form_url(f'/accounts/[[account]]/orders/{order_id}'),
+                headers=self._headers
+            )
+    
+        if response.status_code != httpx.codes.OK:
+            raise IOError(
+                f'failed to delete order with a status code of '
+                f'{response.status_code}: {response.text}'
+            )
+
+    @property
+    async def account_returns(self) -> ReturnStream:
+    
+        async with httpx.AsyncClient() as client:
+            gainloss_coro = client.get(
+                url=self._form_url('/accounts/[[account]]/gainloss'),
+                headers=self._headers
+            )
+            journal_history_coro = client.get(
+                url=self._form_url('/accounts/[[account]]/history'),
+                params={'type': 'journal'},
+                headers=self._headers
+            )
+            wire_history_coro = client.get(
+                url=self._form_url('/accounts/[[account]]/history'),
+                params={'type': 'wire'},
+                headers=self._headers
+            )
+            (gainloss_response,
+                journal_history_response,
+                wire_history_response) = await asyncio.gather(
+                gainloss_coro,
+                journal_history_coro,
+                wire_history_coro
+            )
+    
+        if gainloss_response.status_code != codes.OK:
+            raise IOError(
+                f'failed to retrieve gainloss from Tradier account '
+                f'with a status code of {gainloss_response.status_code}: '
+                f'{gainloss_response.text}'
+            )
+        if journal_history_response.status_code != codes.OK:
+            raise IOError(
+                f'failed to retrieve journal history from Tradier account '
+                f'with a status code of {journal_history_response.status_code}: '
+                f'{journal_history_response.text}'
+            )
+        if wire_history_response.status_code != codes.OK:
+            raise IOError(
+                f'failed to retrieve wire history from Tradier account '
+                f'with a status code of {wire_history_response.status_code}: '
+                f'{wire_history_response.text}'
+            )
+
+        gainloss = gainloss_response.json()['gainloss']['closed_position']
+        
+        closed_positions = [
+            ClosedPosition(
+                name=x['symbol'],
+                size=x['quantity'],
+                cost_basis=x['cost'],
+                time_opened=x['open_date'],
+                time_closed=x['close_date'],
+                proceeds=x['proceeds']
+            ) for x in gainloss
+        ]
+        
+        journal_history = journal_history_response.json()['history']['event']
+        wire_history = wire_history_response.json()['history']['event']
+
+        funds_received = sorted([
+            (
+                datetime.strptime(x['date'], '%Y-%m-%dT%H:%M:%SZ'),
+                x['amount']
+            ) for x in journal_history
+            if x['journal']['description'] == 'FUNDS RECD'
+        ], key=lambda x: x[0])
+        
+        wires = [
+            (
+                datetime.strptime(x['date'], '%Y-%m-%dT%H:%M:%SZ'),
+                x['amount']
+            ) for x in (wire_history if isinstance(wire_history, list) else [wire_history])
+        ]
+
+        initial_amount = funds_received[0][1]
+        admin_adjustments = funds_received[1:] + wires
+        
+        return ReturnStream(initial_amount, closed_positions, admin_adjustments)
+
+    async def history(self, name: str):
+        
+        end = datetime.utcnow()
+        start = end - timedelta(days=365)
+    
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url=self._form_url('/markets/history/'),
+                params=dict(
+                    symbol=name,
+                    start=start.strftime('%Y-%m-%d'),
+                    end=end.strftime('%Y-%m-%d')
+                ),
+                headers=self._headers
+            )
+    
+        if response.status_code != codes.OK:
+            raise IOError(
+                f'failed to get history from Tradier for symbol {name} '
+                f'with a status code of {response.status_code}: {response.text}'
+            )
+        
+        df = pandas.json_normalize(response.json()['history']['day'])
+        df['date'] = pandas.to_datetime(df['date'])
+        df = df.set_index('date')
+        
+        return df

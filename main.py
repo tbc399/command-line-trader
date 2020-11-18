@@ -1,9 +1,9 @@
 import sys
-import time
 import click
 import asyncio
 import pydantic
 import itertools
+#import mplfinance
 
 from functools import wraps
 from tabulate import tabulate
@@ -120,7 +120,7 @@ async def list_():
         access_token='ey39F8VMeFvhNsq4vavzeQXThcpL'
     )
     
-    positions, account = await wait_n_spin(
+    positions, account_ = await wait_n_spin(
         asyncio.gather(
             broker.positions,
             broker.account_balance
@@ -142,8 +142,10 @@ async def list_():
             x.name,
             x.size,
             color_pl(percent_change(x.cost_basis, y.price * x.size)),
-            ((y.price * x.size) / account.total_equity) * 100,
-            (now - x.time_acquired).days
+            ((y.price * x.size) / account_.total_equity) * 100,
+            '-',
+            '-',
+            (now - x.time_opened).days
         ] for x, y in zip(
             sorted(positions, key=lambda x: x.name),
             sorted(quotes, key=lambda x: x.name)
@@ -159,6 +161,8 @@ async def list_():
                 'Quantity',
                 'Gain/Loss (%)',
                 'Concentration (%)',
+                'Stop Loss',
+                'Take Profit',
                 'Days Held'
             ],
             tablefmt='fancy_grid',
@@ -167,7 +171,21 @@ async def list_():
     )
     click.echo()
     
+
+@cli.command()
+@click.argument('name')
+@coro
+async def plot(name):
     
+    broker = br.Tradier(
+        '6YA05267',
+        access_token='ey39F8VMeFvhNsq4vavzeQXThcpL'
+    )
+    
+    history_data = await wait_n_spin(broker.history(name), 'loading')
+    #mplfinance.plot(history_data)
+
+
 @position.command()
 @click.argument('name')
 @click.option('-a', '--allocation', type=click.IntRange(1, 100), default=2)
@@ -206,6 +224,8 @@ async def enter(name, allocation, stop_loss, preview):
         if stop_price >= quote.price:
             click.echo('stop loss price must be less than quote price')
             return
+        
+    #  TODO: need to add validation that enough settled funds exist
 
     if preview:
         click.echo(
@@ -238,11 +258,40 @@ async def enter(name, allocation, stop_loss, preview):
 
 @position.command(name='exit')
 @click.argument('name')
-def exit_(name):
-    #  TODO: check that name is actually currently held
-    #  TODO: remove any open orders
-    click.echo(f'exit a position {name}')
+@coro
+async def exit_(name):
+
+    broker = br.Tradier(
+        '6YA05267',
+        access_token='ey39F8VMeFvhNsq4vavzeQXThcpL'
+    )
     
+    orders, positions = await wait_n_spin(
+        asyncio.gather(broker.orders, broker.positions),
+        'checking',
+        persist=False
+    )
+    
+    if name not in positions:
+        click.echo(f'{name} is not currently held')
+        return
+    
+    open_orders = [order for order in orders if order.type == 'open']
+    for order in open_orders:
+        click.echo(f'cancelling open {order.type} order {order.id}')
+        
+    await wait_n_spin(
+        asyncio.gather(
+            [broker.cancel_order(order.id) for order in open_orders]
+        ), 'cancelling open orders'
+    )
+
+    pos = [x for x in positions if x == name][0]
+    await wait_n_spin(
+        broker.place_market_sell(name, pos.size),
+        f'placing market sell for {name}'
+    )
+
     
 @position.command()
 def history():
@@ -304,6 +353,40 @@ async def account(ctx):
         )
     )
     click.echo('')
+    
+
+@account.command()
+@coro
+async def returns():
+    
+    broker = br.Tradier(
+        '6YA05267',
+        access_token='ey39F8VMeFvhNsq4vavzeQXThcpL'
+    )
+    
+    returns_ = await wait_n_spin(
+        broker.account_returns,
+        'loading',
+        persist=False
+    )
+    
+    click.echo('')
+    click.echo(
+        tabulate(
+            [[
+                returns_.total_return,
+                returns_.ytd_return
+            ]],
+            headers=[
+                f'Total Returns',
+                'YTD Returns'
+            ],
+            tablefmt='fancy_grid',
+            floatfmt=',.2f'
+        )
+    )
+    click.echo('')
+    returns_.returns
 
 
 if __name__ == '__main__':
