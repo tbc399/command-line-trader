@@ -7,7 +7,7 @@ from enum import Enum
 from httpx import codes
 from typing import Collection, List, Tuple
 from pydantic import BaseModel
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from collections import defaultdict
 
 
@@ -31,6 +31,12 @@ class ClosedPosition(Position):
     proceeds: float
     time_closed: datetime
     
+    
+class AccountAction(BaseModel):
+    type: str
+    amount: float
+    date: datetime
+    
 
 class OrderStatus(Enum):
     OPEN = 'open'
@@ -44,6 +50,11 @@ class OrderStatus(Enum):
     ACCEPTED_FOR_BIDDING = 'accepted_for_bidding'
     ERROR = 'error'
     HELD = 'held'
+
+
+class MarketDay(BaseModel):
+    open: datetime
+    close: datetime
 
 
 class Order(BaseModel):
@@ -115,7 +126,7 @@ class ReturnStream:
         ]
         
         grouped_dollar_gains = defaultdict(float)
-        for dt, gl in position_gains:# + admin_adjustments:
+        for dt, gl in position_gains + admin_adjustments:
             grouped_dollar_gains[dt.date()] += gl
             
         self._gains = sorted(grouped_dollar_gains.items(), key=lambda x: x[0])
@@ -143,7 +154,6 @@ class ReturnStream:
         last_value = self._initial
         percentage_returns = []
         for dt, gl in self._gains:
-            print(dt, last_value)
             rtn = ReturnStream.__percent_change(self._initial, last_value + gl)
             percentage_returns.append((dt, rtn))
             last_value += gl
@@ -192,11 +202,15 @@ class Broker(ABC):
 
     @property
     @abstractmethod
-    async def account_returns(self) -> ReturnStream:
+    async def account_pnl(self) -> ReturnStream:
         pass
     
     @abstractmethod
-    async def history(self, name: str):
+    async def account_history(self):
+        pass
+    
+    @abstractmethod
+    async def calendar(self) -> List[MarketDay]:
         pass
 
 
@@ -462,52 +476,28 @@ class Tradier(Broker):
                 f'{response.status_code}: {response.text}'
             )
 
-    @property
-    async def account_returns(self) -> ReturnStream:
+    async def account_pnl(self, since_date: date = None) -> List[ClosedPosition]:
+        
+        if since_date is None:
+            params_ = None
+        else:
+            params_ = {'start': since_date.strftime('%Y-%m-%d')}
     
         async with httpx.AsyncClient() as client:
-            gainloss_coro = client.get(
+            response = await client.get(
                 url=self._form_url('/accounts/[[account]]/gainloss'),
+                params=params_,
                 headers=self._headers
-            )
-            journal_history_coro = client.get(
-                url=self._form_url('/accounts/[[account]]/history'),
-                params={'type': 'journal'},
-                headers=self._headers
-            )
-            wire_history_coro = client.get(
-                url=self._form_url('/accounts/[[account]]/history'),
-                params={'type': 'wire'},
-                headers=self._headers
-            )
-            (gainloss_response,
-                journal_history_response,
-                wire_history_response) = await asyncio.gather(
-                gainloss_coro,
-                journal_history_coro,
-                wire_history_coro
             )
     
-        if gainloss_response.status_code != codes.OK:
+        if response.status_code != codes.OK:
             raise IOError(
                 f'failed to retrieve gainloss from Tradier account '
-                f'with a status code of {gainloss_response.status_code}: '
-                f'{gainloss_response.text}'
-            )
-        if journal_history_response.status_code != codes.OK:
-            raise IOError(
-                f'failed to retrieve journal history from Tradier account '
-                f'with a status code of {journal_history_response.status_code}: '
-                f'{journal_history_response.text}'
-            )
-        if wire_history_response.status_code != codes.OK:
-            raise IOError(
-                f'failed to retrieve wire history from Tradier account '
-                f'with a status code of {wire_history_response.status_code}: '
-                f'{wire_history_response.text}'
+                f'with a status code of {response.status_code}: '
+                f'{response.text}'
             )
 
-        gainloss = gainloss_response.json()['gainloss']['closed_position']
+        gainloss = response.json()['gainloss']['closed_position']
         
         closed_positions = [
             ClosedPosition(
@@ -520,53 +510,59 @@ class Tradier(Broker):
             ) for x in gainloss
         ]
         
-        journal_history = journal_history_response.json()['history']['event']
-        wire_history = wire_history_response.json()['history']['event']
+        return closed_positions
 
-        funds_received = sorted([
-            (
-                datetime.strptime(x['date'], '%Y-%m-%dT%H:%M:%SZ'),
-                x['amount']
-            ) for x in journal_history
-            if x['journal']['description'] == 'FUNDS RECD'
-        ], key=lambda x: x[0])
+    async def account_history(self):
         
-        wires = [
-            (
-                datetime.strptime(x['date'], '%Y-%m-%dT%H:%M:%SZ'),
-                x['amount']
-            ) for x in (wire_history if isinstance(wire_history, list) else [wire_history])
-        ]
-
-        initial_amount = funds_received[0][1]
-        admin_adjustments = funds_received[1:] + wires
-        
-        return ReturnStream(initial_amount, closed_positions, admin_adjustments)
-
-    async def history(self, name: str):
-        
-        end = datetime.utcnow()
-        start = end - timedelta(days=365)
-    
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                url=self._form_url('/markets/history/'),
+                url=self._form_url('/accounts/[[account]]/history/'),
                 params=dict(
-                    symbol=name,
-                    start=start.strftime('%Y-%m-%d'),
-                    end=end.strftime('%Y-%m-%d')
+                    limit=10000,
+                    type=','.join((
+                        'ach',
+                        'wire',
+                        'dividend',
+                        'fee',
+                        'tax',
+                        'journal',
+                        'check',
+                        'transfer',
+                        'adjustment',
+                        'interest'
+                    ))
                 ),
                 headers=self._headers
             )
     
         if response.status_code != codes.OK:
             raise IOError(
-                f'failed to get history from Tradier for symbol {name} '
+                f'failed to get account history from Tradier '
                 f'with a status code of {response.status_code}: {response.text}'
             )
         
-        df = pandas.json_normalize(response.json()['history']['day'])
-        df['date'] = pandas.to_datetime(df['date'])
-        df = df.set_index('date')
+        actions = [
+            AccountAction(
+                type=action['type'],
+                amount=action['amount'],
+                date=action['date']
+            ) for action in response.json()['history']['event']
+        ]
         
-        return df
+        return actions
+    
+    async def calendar(self) -> List[MarketDay]:
+    
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url=self._form_url('/markets/calendar/'),
+                headers=self._headers
+            )
+    
+        if response.status_code != codes.OK:
+            raise IOError(
+                f'failed to get market calendar from Tradier '
+                f'with a status code of {response.status_code}: {response.text}'
+            )
+
+        return None

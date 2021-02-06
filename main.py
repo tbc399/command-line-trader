@@ -3,12 +3,14 @@ import click
 import asyncio
 import pydantic
 import itertools
-#import mplfinance
+import mplfinance
+import pandas
 
 from functools import wraps
 from tabulate import tabulate
-from datetime import datetime
+from datetime import datetime, date
 from typing import Collection
+from collections import defaultdict
 
 import broker as br
 
@@ -135,7 +137,7 @@ async def list_():
         persist=False
     )
     
-    now = datetime.utcnow()
+    today = datetime.utcnow().date()
     
     table = [
         [
@@ -145,7 +147,7 @@ async def list_():
             ((y.price * x.size) / account_.total_equity) * 100,
             '-',
             '-',
-            (now - x.time_opened).days
+            (today - x.time_opened.date()).days
         ] for x, y in zip(
             sorted(positions, key=lambda x: x.name),
             sorted(quotes, key=lambda x: x.name)
@@ -252,7 +254,7 @@ async def enter(name, allocation, stop_loss, preview):
         await broker.place_stop_loss(
             name,
             order.executed_quantity,
-            stop_price
+            round(stop_price, 2)
         )
 
 
@@ -277,12 +279,10 @@ async def exit_(name):
         return
     
     open_orders = [order for order in orders if order.type == 'open']
-    for order in open_orders:
-        click.echo(f'cancelling open {order.type} order {order.id}')
-        
+    
     await wait_n_spin(
         asyncio.gather(
-            [broker.cancel_order(order.id) for order in open_orders]
+            *[broker.cancel_order(order.id) for order in open_orders]
         ), 'cancelling open orders'
     )
 
@@ -294,8 +294,46 @@ async def exit_(name):
 
     
 @position.command()
-def history():
-    click.echo('position history')
+@coro
+async def history():
+
+    broker = br.Tradier(
+        '6YA05267',
+        access_token='ey39F8VMeFvhNsq4vavzeQXThcpL'
+    )
+
+    since = date(year=date.today().year, month=1, day=1)
+
+    pnl = await wait_n_spin(
+        broker.account_pnl(since_date=since),
+        'loading',
+        persist=False
+    )
+    
+    table = [
+        [
+            x.name,
+            x.size,
+            color_pl(percent_change(x.cost_basis, x.proceeds)),
+            (x.time_closed - x.time_opened).days
+        ] for x in pnl
+    ]
+
+    click.echo()
+    click.echo(
+        tabulate(
+            table,
+            headers=[
+                f'Name ({len(table)})',
+                'Quantity',
+                'Gain/Loss (%)',
+                'Days Held'
+            ],
+            tablefmt='fancy_grid',
+            floatfmt='.2f'
+        )
+    )
+    click.echo()
 
 
 @position.command()
@@ -314,9 +352,10 @@ async def adjust(name):
     
     
 @cli.group(invoke_without_command=True)
+@click.option('-p', '--plot', is_flag=True)
 @click.pass_context
 @coro
-async def account(ctx):
+async def account(ctx, plot):
     
     if ctx.invoked_subcommand is not None:
         return
@@ -326,11 +365,33 @@ async def account(ctx):
         access_token='ey39F8VMeFvhNsq4vavzeQXThcpL'
     )
 
-    balances = await wait_n_spin(
-        broker.account_balance,
+    balances, pnl, account_history = await wait_n_spin(
+        asyncio.gather(
+            broker.account_balance,
+            broker.account_pnl(since_date=date(year=2015, month=1, day=1)),
+            broker.account_history()
+        ),
         'loading',
         persist=False
     )
+    
+    if plot:
+        agg = defaultdict(int)
+        for x, y in [(x.time_closed, x.proceeds - x.cost_basis) for x in pnl] + [(x.date, x.amount) for x in account_history]:
+            agg[x] += y
+        
+        running_sum = 0
+        account_value = []
+        for x, y in sorted(agg.items(), key=lambda x: x[0]):
+            running_sum += y
+            print(x, running_sum)
+            account_value.append((x, running_sum, 0, 0, 0))
+         
+        df = pandas.DataFrame(account_value, columns=('date', 'close', 'open', 'high', 'low'))
+        df['date'] = pandas.to_datetime(df['date'])
+        df = df.set_index('date')
+        mplfinance.plot(df, type='line')
+        return
     
     click.echo('')
     open_pl_percentage = (balances.open_pl /
@@ -356,37 +417,62 @@ async def account(ctx):
     
 
 @account.command()
+@click.option('-p', '--plot')
 @coro
-async def returns():
+async def returns(plot):
     
     broker = br.Tradier(
         '6YA05267',
         access_token='ey39F8VMeFvhNsq4vavzeQXThcpL'
     )
     
-    returns_ = await wait_n_spin(
-        broker.account_returns,
+    since = date(year=date.today().year, month=1, day=1)
+    
+    balances, pnl, history_ = await wait_n_spin(
+        asyncio.gather(
+            broker.account_balance,
+            broker.account_pnl(since_date=since),
+            broker.account_history()
+        ),
         'loading',
         persist=False
     )
+    
+    pnl_sum = sum(x.proceeds - x.cost_basis for x in pnl)
+    account_value = balances.total_equity - balances.open_pl
+    
+    returns_ = (pnl_sum / (account_value - pnl_sum)) * 100
     
     click.echo('')
     click.echo(
         tabulate(
             [[
-                returns_.total_return,
-                returns_.ytd_return
+                returns_,
+                pnl_sum
             ]],
             headers=[
-                f'Total Returns',
-                'YTD Returns'
+                f'Return Percentage',
+                'Return Value'
             ],
             tablefmt='fancy_grid',
             floatfmt=',.2f'
         )
     )
     click.echo('')
-    returns_.returns
+
+
+@cli.group()
+@coro
+async def market():
+    
+    broker = br.Tradier(
+        '6YA05267',
+        access_token='ey39F8VMeFvhNsq4vavzeQXThcpL'
+    )
+    
+    market_days = await broker.calendar()
+    
+    
 
 
 if __name__ == '__main__':
