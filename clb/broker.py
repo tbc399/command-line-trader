@@ -284,7 +284,7 @@ class Tradier(Broker):
                 f'for {name} with a status code of'
                 f' {response.status_code}: {response.text}'
             )
-    
+        print(response.json())
         return response.json()['order']['id']
 
     async def place_market_sell(self, name: str, quantity: int) -> str:
@@ -358,13 +358,15 @@ class Tradier(Broker):
             ]
 
         else:
+            
+            print(positions)
 
             return [
                 Position(
                     name=positions['symbol'],
                     size=positions['quantity'],
                     cost_basis=positions['cost_basis'],
-                    time_acquired=datetime.strptime(
+                    time_opened=datetime.strptime(
                         positions['date_acquired'],
                         '%Y-%m-%dT%H:%M:%S.%fZ'
                     )

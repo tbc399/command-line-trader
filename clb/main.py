@@ -12,7 +12,7 @@ from datetime import datetime, date
 from typing import Collection
 from collections import defaultdict
 
-import broker as br
+from clb import broker as br
 
 
 def coro(f):
@@ -74,6 +74,21 @@ def cli():
 
 @cli.group()
 def position():
+    pass
+
+
+@cli.group()
+def watch():
+    pass
+
+
+@cli.group()
+def chart():
+    pass
+
+
+@cli.group()
+def config():
     pass
 
 
@@ -473,7 +488,5 @@ async def market():
     market_days = await broker.calendar()
     
     
-
-
 if __name__ == '__main__':
     cli()
