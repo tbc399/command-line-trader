@@ -3,7 +3,6 @@ import click
 import asyncio
 import pydantic
 import itertools
-import mplfinance
 import pandas
 
 from functools import wraps
@@ -12,8 +11,18 @@ from datetime import datetime, date
 from typing import Collection
 from collections import defaultdict
 
-from clb import broker as br
+from clt import broker as br
 
+
+'''
+command ideas
+context: different contexts to allow for multiple workspaces for various configurations
+    clt context new <name>  # create a new context with the given name
+    clt context <aame>  # switch to the specified context
+    clt context  # print the current context
+    clt context list  # show all available contexts
+    
+'''
 
 def coro(f):
     @wraps(f)
@@ -405,7 +414,7 @@ async def account(ctx, plot):
         df = pandas.DataFrame(account_value, columns=('date', 'close', 'open', 'high', 'low'))
         df['date'] = pandas.to_datetime(df['date'])
         df = df.set_index('date')
-        mplfinance.plot(df, type='line')
+        #mplfinance.plot(df, type='line')
         return
     
     click.echo('')

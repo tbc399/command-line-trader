@@ -1,3 +1,5 @@
-# Command Line Broker
-A command line interface for interacting with your broker. Currently supports
-Tradier brokerage accounts.
+# Command Line Trader
+A simple command line trading platform.
+
+#### Broker Support:
+- Tradier

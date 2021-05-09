@@ -14,6 +14,6 @@ setup(
     ],
     entry_points='''
         [console_scripts]
-        brkr=clb.main:cli
+        brkr=clt.main:cli
     ''',
 )
