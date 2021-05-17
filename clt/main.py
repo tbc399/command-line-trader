@@ -16,11 +16,29 @@ from clt import broker as br
 
 '''
 command ideas
+
 context: different contexts to allow for multiple workspaces for various configurations
     clt context new <name>  # create a new context with the given name
     clt context <aame>  # switch to the specified context
     clt context  # print the current context
     clt context list  # show all available contexts
+    clt context rename <new-name>
+    clt context add-account
+
+config: configuration for the application as a whole and certain contexts
+    clt config <command_name> [options]
+
+account: perform account related actions
+    clt account add <short_name>
+    clt account returns --plot
+    
+watch: setup and matinain a watchlist for the current context
+    clt watch <name> # add the specified stock to the watch list
+    clt watch edit <name> --notes  # add some notes to the stock
+    
+position: manage positions
+    clt position enter <A>,<B>,<C>,...  # enter multiple positions at once
+    clt position exit <A>,<B>,<C>,...  # exit multiple positions at once
     
 '''
 
@@ -31,7 +49,7 @@ def coro(f):
     return wrapper
 
 
-async def wait_n_spin(coroutine, info: str, persist: bool = True):
+async def load_and_spin(coroutine, info: str, persist: bool = True):
     
     task = asyncio.ensure_future(coroutine)
     
@@ -101,6 +119,17 @@ def config():
     pass
 
 
+@cli.group()
+def context():
+    pass
+
+
+@context.command()
+@click.argument('name')
+def new(name):
+    click.echo(name)
+
+
 def percent_change(start, end):
     return ((end - start) / start) * 100
 
@@ -146,7 +175,7 @@ async def list_():
         access_token='ey39F8VMeFvhNsq4vavzeQXThcpL'
     )
     
-    positions, account_ = await wait_n_spin(
+    positions, account_ = await load_and_spin(
         asyncio.gather(
             broker.positions,
             broker.account_balance
@@ -155,7 +184,7 @@ async def list_():
         persist=False
     )
     
-    quotes = await wait_n_spin(
+    quotes = await load_and_spin(
         broker.get_quotes([x.name for x in positions]),
         'loading',
         persist=False
@@ -208,7 +237,7 @@ async def plot(name):
         access_token='ey39F8VMeFvhNsq4vavzeQXThcpL'
     )
     
-    history_data = await wait_n_spin(broker.history(name), 'loading')
+    history_data = await load_and_spin(broker.history(name), 'loading')
     #mplfinance.plot(history_data)
 
 
@@ -285,14 +314,14 @@ async def enter(name, allocation, stop_loss, preview):
 @position.command(name='exit')
 @click.argument('name')
 @coro
-async def exit_(name):
+async def exit_(name: str):
 
     broker = br.Tradier(
         '6YA05267',
         access_token='ey39F8VMeFvhNsq4vavzeQXThcpL'
     )
     
-    orders, positions = await wait_n_spin(
+    orders, positions = await load_and_spin(
         asyncio.gather(broker.orders, broker.positions),
         'checking',
         persist=False
@@ -302,18 +331,22 @@ async def exit_(name):
         click.echo(f'{name} is not currently held')
         return
     
-    open_orders = [order for order in orders if order.type == 'open']
+    open_orders = [
+        order for order in orders 
+        if order.status == br.OrderStatus.OPEN 
+           and order.name.lower() == name.lower() 
+    ]
     
-    await wait_n_spin(
+    await load_and_spin(
         asyncio.gather(
             *[broker.cancel_order(order.id) for order in open_orders]
         ), 'cancelling open orders'
     )
 
     pos = [x for x in positions if x == name][0]
-    await wait_n_spin(
+    await load_and_spin(
         broker.place_market_sell(name, pos.size),
-        f'placing market sell for {name}'
+        f'placing market sell for {name.upper()}'
     )
 
     
@@ -328,7 +361,7 @@ async def history():
 
     since = date(year=date.today().year, month=1, day=1)
 
-    pnl = await wait_n_spin(
+    pnl = await load_and_spin(
         broker.account_pnl(since_date=since),
         'loading',
         persist=False
@@ -370,7 +403,7 @@ async def adjust(name):
         await asyncio.sleep(1)
         return 34*93
     
-    result = await wait_n_spin(do_something(), 'doing something', persist=False)
+    result = await load_and_spin(do_something(), 'doing something', persist=False)
     
     click.echo(result)
     
@@ -389,7 +422,7 @@ async def account(ctx, plot):
         access_token='ey39F8VMeFvhNsq4vavzeQXThcpL'
     )
 
-    balances, pnl, account_history = await wait_n_spin(
+    balances, pnl, account_history = await load_and_spin(
         asyncio.gather(
             broker.account_balance,
             broker.account_pnl(since_date=date(year=2015, month=1, day=1)),
@@ -452,7 +485,7 @@ async def returns(plot):
     
     since = date(year=date.today().year, month=1, day=1)
     
-    balances, pnl, history_ = await wait_n_spin(
+    balances, pnl, history_ = await load_and_spin(
         asyncio.gather(
             broker.account_balance,
             broker.account_pnl(since_date=since),
@@ -497,5 +530,11 @@ async def market():
     market_days = await broker.calendar()
     
     
+@account.command()
+def new_():
+    pass
+    
 if __name__ == '__main__':
+    
+    
     cli()

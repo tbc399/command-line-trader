@@ -284,7 +284,6 @@ class Tradier(Broker):
                 f'for {name} with a status code of'
                 f' {response.status_code}: {response.text}'
             )
-        print(response.json())
         return response.json()['order']['id']
 
     async def place_market_sell(self, name: str, quantity: int) -> str:
