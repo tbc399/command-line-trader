@@ -1,9 +1,11 @@
 import sys
+import os
 import click
 import asyncio
 import pydantic
 import itertools
 import pandas
+import yaml
 
 from functools import wraps
 from tabulate import tabulate
@@ -124,10 +126,26 @@ def context():
     pass
 
 
-@context.command()
+@context.command(name='new')
 @click.argument('name')
-def new(name):
-    click.echo(name)
+@click.option('-d', '--description')
+def new_context(name: str, description: str):
+    
+    home_dir = os.environ['HOME']
+    clt_dir = '.clt'
+    clt_base_dir = os.path.join(home_dir, clt_dir)
+    context_dir = os.path.join(clt_base_dir, 'context')
+    
+    if not os.path.exists(context_dir):
+        os.makedirs(context_dir)
+        
+    context_file = os.path.join(context_dir, f'{name}.yaml')
+    with open(context_file, 'w') as f:
+        f.write(f'# {name}\n')
+        if description:
+            f.write(f'# {description}\n')
+    
+    click.echo(clt_base_dir)
 
 
 def percent_change(start, end):
@@ -530,10 +548,13 @@ async def market():
     market_days = await broker.calendar()
     
     
-@account.command()
-def new_():
-    pass
-    
+@account.command(name='new')
+@click.argument('name')
+def new_account(name: str):
+
+    home_dir = os.environ['HOME']
+    click.echo(home_dir)
+
 if __name__ == '__main__':
     
     
