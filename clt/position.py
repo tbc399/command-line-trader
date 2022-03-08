@@ -175,7 +175,8 @@ async def enter(name, allocation, stop_loss, preview):
 
 
 @position.command(name='exit')
-@click.argument('name')
+@click.argument('name', required=False)
+#@click.option('-a', '--all', is_flag=True, name='all_')
 @asink
 async def exit_(name: str):
     

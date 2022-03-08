@@ -39,8 +39,13 @@ watch: setup and maintain a watchlist for the current context
 position: manage positions
     clt position enter <A>,<B>,<C>,...  # enter multiple positions at once
     clt position exit <A>,<B>,<C>,...  # exit multiple positions at once
+    clt position exit --all  # close all positions
     clt position edit <name> --notes  # add some notes to the position
     clt position edit <name> --stop  # add some notes to the position
+    
+rebalance: rebalance a portfolio
+    clt rebalance  # perform a rebalance according to what's configured
+    clt rebalance
     
 '''
 

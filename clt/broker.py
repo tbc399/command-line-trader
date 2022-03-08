@@ -379,6 +379,9 @@ class Tradier(Broker):
 
     async def get_quotes(self, names: Collection[str]) -> List[Quote]:
         
+        if not names:
+            return []
+        
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 url=self._form_url('/markets/quotes/'),
@@ -449,7 +452,8 @@ class Tradier(Broker):
                 f'{response.status_code}: {response.text}'
             )
 
-        orders = response.json()['orders']['order']
+        orders = response.json()['orders']
+        orders = [] if orders == 'null' else [orders['order']] if type(orders['order']) is dict else orders['order']
 
         return [
             Order(

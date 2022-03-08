@@ -55,5 +55,5 @@ def list_(ctx):
     
     watchlist: List[WatchlistItem] = ctx.obj['context'].watchlist
     
-    for item in sorted(watchlist, key=lambda x: x.name):
+    for item in watchlist:
         click.echo(f'{item.name}: {item.notes}')
