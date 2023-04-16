@@ -12,14 +12,13 @@ Things to figure out:
 
 import asyncio
 import string
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from os import environ
 from statistics import correlation, linear_regression
-from typing import List
 
 import click
 import httpx
+import position
 from dateutil import parser
 from exchange_calendars import get_calendar
 from pandas import Timestamp
@@ -28,8 +27,8 @@ from tiingo import TiingoClient
 from clt import broker as brkr
 from clt.utils import asink
 
-# tiingo_client = TiingoClient()
-# tiingo_token = environ.get("TIINGO_API_KEY")
+tiingo_client = TiingoClient()
+tiingo_token = environ.get("TIINGO_API_KEY")
 #
 # tradier_account = environ.get("TRADIER_ACCOUNT")
 # tradier_token = environ.get("TRADIER_API_BEARER")
@@ -48,12 +47,12 @@ def session_subtract(session, n):
     return session
 
 
-@click.group(invoke_without_command=True)
-@click.option("-p", "--plot", is_flag=True)
+@click.group
 @click.pass_context
 @asink
 async def run(ctx):
-    broker = brkr.Tradier("6YA05267", access_token="ey39F8VMeFvhNsq4vavzeQXThcpL")
+    broker = brkr.Tradier("6YA05267", access_token="ey39F8VMeFvhNsq4vavzeQXThcpL", env="sandbox")
+    portfolio_size = 20
 
     while True:
         now = Timestamp.utcnow()
@@ -111,7 +110,7 @@ async def run(ctx):
         tasks = [get_price(symbol) for symbol in symbols[:100]]
         minute_prices = await asyncio.gather(*tasks)
 
-        # sort on volume and pull the top 1k or 2k
+        # TODO: sort on volume and pull the top 1k or 2k
 
         # compute correlation and slope for each name
         momentum_quality = set()
@@ -128,7 +127,10 @@ async def run(ctx):
 
         # sort momentum quality
         top_ranked_momentum = [
-            name for name, _ in sorted(momentum_quality, key=lambda _: _[1], reverse=True)[:20]
+            name
+            for name, _ in sorted(momentum_quality, key=lambda _: _[1], reverse=True)[
+                :portfolio_size
+            ]
         ]
 
         # get current portfolio
@@ -141,11 +143,8 @@ async def run(ctx):
 
         # sell what needs to be sold
         for name in names_to_sell:
-            order_id = await place_market_sell(name, positions[name].size)
-            print(f"Selling off {name}")
+            await position.enter(name)
 
         # buy what needs to be bought if we have the settled cash to do so
         for name in names_to_buy:
-            await place_market_buy(
-                name,
-            )
+            await position.enter(name, (100 // portfolio_size))

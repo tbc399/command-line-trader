@@ -214,8 +214,7 @@ class Tradier(Broker):
         if access_token is None:
             raise ValueError("must have an access token to instantiate Tradier broker")
         
-        api_env = kwargs.get('env', 'api')
-        self._api_env = api
+        self._api_env = kwargs.get('env', 'api') # can also be 'sandbox'
 
         self._headers = dict(Accept="application/json", Authorization=f"Bearer {access_token}")
 
@@ -224,10 +223,10 @@ class Tradier(Broker):
         tradier_api_url = f"{self._api_env}.tradier.com"
         tradier_api_version = "v1"
 
-        if tradier_api is None or tradier_api_version is None:
+        if tradier_api_url is None or tradier_api_version is None:
             raise EnvironmentError("TRADIER_API and TRADIER_API_VERSION cannot be null")
 
-        base = f"https://{tradier_api}/{tradier_api_version}"
+        base = f"https://{tradier_api_url}/{tradier_api_version}"
         components = (base, endpoint)
         almost_there = "/".join(x.strip("/") for x in components)
         complete_url = almost_there.replace("[[account]]", self._account_number)
