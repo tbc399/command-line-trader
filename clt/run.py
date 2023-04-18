@@ -13,18 +13,17 @@ Things to figure out:
 import asyncio
 import string
 from datetime import timedelta
-from operator import itemgetter
 from os import environ
 from statistics import correlation, linear_regression
 
 import click
 import httpx
+import toolz
 from dateutil import parser
 from exchange_calendars import get_calendar
 from pandas import Timestamp
 from tiingo import TiingoClient
 
-from clt import broker as brkr
 from clt import position
 from clt.utils import asink
 
@@ -63,19 +62,30 @@ async def fetch_symbols(today, broker, allocation):
     # filter on volume and price
     async def get_price(symbol):
         async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"https://api.tiingo.com/tiingo/daily/{symbol}/prices",
-                params={
-                    "columns": "date,close,volume",
-                    "startDate": last_session,
-                    "endDate": last_session,
-                },
-                headers={"Authorization": f"Token {tiingo_token}"},
-            )
-            return symbol, resp.json()[0]
+            retries = 3
+            while retries > 0:
+                try:
+                    resp = await client.get(
+                        f"https://api.tiingo.com/tiingo/daily/{symbol}/prices",
+                        params={
+                            "columns": "date,close,volume",
+                            "startDate": last_session,
+                            "endDate": last_session,
+                        },
+                        headers={"Authorization": f"Token {tiingo_token}"},
+                        timeout=5,
+                    )
+                    print(f"Fetched daily prices for {symbol}")
+                    return symbol, resp.json()[0] if resp.json() else {}
+                except httpx.ConnectTimeout as error:
+                    retries -= 1
+            print(f"Failed to get daily price for {symbol}")
+            return symbol, {}
 
-    tasks = [get_price(symbol) for symbol in symbols[:1000]]
-    daily_prices = await asyncio.gather(*tasks)
+    chunked_tasks = toolz.partition(1000, [get_price(symbol) for symbol in symbols])
+    daily_prices = []
+    for chunk in chunked_tasks:
+        daily_prices += await asyncio.gather(*chunk)
 
     balance = await broker.account_balance
     account_base = balance.total_equity - balance.open_pl
@@ -84,7 +94,7 @@ async def fetch_symbols(today, broker, allocation):
     # TODO: filter for price that makes sense
     # TODO: switch this to percentage later
     affordable_daily_prices = [
-        (symbol, data) for symbol, data in daily_prices if data["close"] <= max_price
+        (symbol, data) for symbol, data in daily_prices if data and data["close"] <= max_price
     ]
     high_volume_filtered = sorted(affordable_daily_prices, key=lambda x: x[1]["volume"])[-3000:]
     return [symbol for symbol, _ in high_volume_filtered]
@@ -96,19 +106,29 @@ async def rebalance(broker, today, symbols):
     # Fetch price data for each name
     async def get_price(symbol):
         async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"https://api.tiingo.com/iex/{symbol}/prices",
-                params={
-                    "resampleFreq": "15min",
-                    "columns": "date,close,volume",
-                    "startDate": str(session_subtract(last_session, 5).date()),
-                },
-                headers={"Authorization": f"Token {tiingo_token}"},
-            )
-            return symbol, resp.json()
+            retries = 3
+            while retries > 0:
+                try:
+                    resp = await client.get(
+                        f"https://api.tiingo.com/iex/{symbol}/prices",
+                        params={
+                            "resampleFreq": "15min",
+                            "columns": "date,close,volume",
+                            "startDate": str(session_subtract(last_session, 4).date()),
+                        },
+                        headers={"Authorization": f"Token {tiingo_token}"},
+                        timeout=5,
+                    )
+                    return symbol, resp.json()
+                except httpx.ConnectTimeout as error:
+                    retries -= 1
+                print(f"Failed to get prices for {symbol}")
+                return symbol, []
 
-    tasks = [get_price(symbol) for symbol in symbols]
-    minute_prices = await asyncio.gather(*tasks)
+    chunked_tasks = toolz.partition(500, [get_price(symbol) for symbol in symbols])
+    minute_prices = []
+    for chunk in chunked_tasks:
+        minute_prices += await asyncio.gather(*chunk)
 
     # compute correlation and slope for each name
     momentum_quality = set()
@@ -153,19 +173,19 @@ async def run(ctx):
     broker = ctx.obj.get("context").broker
 
     # Need to grab symbols here to initialize
-    symbols = await fetch_symbols(Timestamp.utcnow().date(), broker, portfolio_size)
+    # symbols = await fetch_symbols(Timestamp.utcnow().date(), broker, portfolio_size)
+    symbols = []
     last_symbol_refresh = Timestamp.today().date()  # check this will work with other tz times
     last_rebalance = Timestamp.today().date() - timedelta(days=1)
 
     while True:
-        await asyncio.sleep(5)
-
         now = Timestamp.utcnow()
         today = now.today().date()
 
         click.echo(f"Holding {now.time()}")
 
         if not calendar.is_session(today):
+            await asyncio.sleep(5)
             continue
 
         # setup rebalance frequency
@@ -174,8 +194,8 @@ async def run(ctx):
 
         if first_minute <= now < last_minute:
             # market is open
-            # rebalance everyday at noon
-            # if now.hour == 12:
+            # rebalance every day at noon
+            # if now.hour == 12 and now.minute == 0:
             if last_rebalance < today:
                 click.echo("Rebalancing")
                 await rebalance(broker, today, symbols)
@@ -186,3 +206,5 @@ async def run(ctx):
                 click.echo("Refreshing symbols list")
                 symbols = await fetch_symbols(today, broker, portfolio_size)
                 last_symbol_refresh = today
+
+        await asyncio.sleep(5)
