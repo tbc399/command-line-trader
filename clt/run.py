@@ -12,8 +12,7 @@ Things to figure out:
 
 import asyncio
 import string
-from collections import namedtuple
-from datetime import datetime, timedelta
+from datetime import timedelta
 from operator import itemgetter
 from os import environ
 from statistics import correlation, linear_regression
@@ -31,16 +30,12 @@ from clt.utils import asink
 
 tiingo_client = TiingoClient()
 tiingo_token = environ.get("TIINGO_API_KEY")
-#
-# tradier_account = environ.get("TRADIER_ACCOUNT")
-# tradier_token = environ.get("TRADIER_API_BEARER")
-# tradier_url = environ.get("TRADIER_URL")
 
 calendar = get_calendar("NYSE")
 
 # period over which to calculate momentum
 look_back_period = 130  # roughly about 4 days of 15min bars
-portfolio_size = 20
+portfolio_size = 25  # target portfolio size
 
 
 def session_subtract(session, n):
@@ -69,17 +64,17 @@ async def fetch_symbols(today, broker, allocation):
     async def get_price(symbol):
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"https://api.tiingo.com/tiingo/{symbol}/prices",
+                f"https://api.tiingo.com/tiingo/daily/{symbol}/prices",
                 params={
                     "columns": "date,close,volume",
-                    "startDate": last_session.date(),
-                    "endDate": last_session.date(),
+                    "startDate": last_session,
+                    "endDate": last_session,
                 },
                 headers={"Authorization": f"Token {tiingo_token}"},
             )
-            return symbol, resp.json()
+            return symbol, resp.json()[0]
 
-    tasks = [get_price(symbol) for symbol in symbols[:100]]
+    tasks = [get_price(symbol) for symbol in symbols[:1000]]
     daily_prices = await asyncio.gather(*tasks)
 
     balance = await broker.account_balance
@@ -88,12 +83,11 @@ async def fetch_symbols(today, broker, allocation):
 
     # TODO: filter for price that makes sense
     # TODO: switch this to percentage later
-    high_volumes_symbols = sorted(
-        (symbol for symbol in daily_prices if symbol["close"] <= max_price),
-        key=itemgetter("volume"),
-    )[-3000:]
-
-    return high_volumes_symbols
+    affordable_daily_prices = [
+        (symbol, data) for symbol, data in daily_prices if data["close"] <= max_price
+    ]
+    high_volume_filtered = sorted(affordable_daily_prices, key=lambda x: x[1]["volume"])[-3000:]
+    return [symbol for symbol, _ in high_volume_filtered]
 
 
 async def rebalance(broker, today, symbols):
@@ -113,7 +107,7 @@ async def rebalance(broker, today, symbols):
             )
             return symbol, resp.json()
 
-    tasks = [get_price(symbol) for symbol in symbols[:100]]
+    tasks = [get_price(symbol) for symbol in symbols]
     minute_prices = await asyncio.gather(*tasks)
 
     # compute correlation and slope for each name
@@ -145,25 +139,21 @@ async def rebalance(broker, today, symbols):
 
     # sell what needs to be sold
     for name in names_to_sell:
-        await position.exit_(name)
+        await position.exit_(broker, name)
 
     # buy what needs to be bought if we have the settled cash to do so
     for name in names_to_buy:
-        await position.enter(name, (100 // portfolio_size))
+        await position.enter_(broker, name, (100 // portfolio_size), None, False)
 
 
 @click.command
 @click.pass_context
 @asink
 async def run(ctx):
-    broker = brkr.Tradier(
-        "6YA05267",
-        access_token="ey39F8VMeFvhNsq4vavzeQXThcpL",
-        env="sandbox",
-    )
+    broker = ctx.obj.get("context").broker
 
     # Need to grab symbols here to initialize
-    symbols = []
+    symbols = await fetch_symbols(Timestamp.utcnow().date(), broker, portfolio_size)
     last_symbol_refresh = Timestamp.today().date()  # check this will work with other tz times
     last_rebalance = Timestamp.today().date() - timedelta(days=1)
 
@@ -172,6 +162,8 @@ async def run(ctx):
 
         now = Timestamp.utcnow()
         today = now.today().date()
+
+        click.echo(f"Holding {now.time()}")
 
         if not calendar.is_session(today):
             continue
@@ -183,12 +175,14 @@ async def run(ctx):
         if first_minute <= now < last_minute:
             # market is open
             # rebalance everyday at noon
-            if now.hour == 12:
-                if last_rebalance < today:
-                    await rebalance(broker, today, symbols)
-                    last_rebalance = today
+            # if now.hour == 12:
+            if last_rebalance < today:
+                click.echo("Rebalancing")
+                await rebalance(broker, today, symbols)
+                last_rebalance = today
         elif now < first_minute:
             # update the symbols list
             if not symbols or last_symbol_refresh < today:
+                click.echo("Refreshing symbols list")
                 symbols = await fetch_symbols(today, broker, portfolio_size)
                 last_symbol_refresh = today

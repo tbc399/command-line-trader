@@ -16,11 +16,11 @@ from clt.utils import asink, green, load_and_spin, red
 @click.pass_context
 @asink
 async def account(ctx, plot):
-
     if ctx.invoked_subcommand is not None:
         return
 
-    broker = br.Tradier("6YA05267", access_token="ey39F8VMeFvhNsq4vavzeQXThcpL")
+    print(ctx)
+    broker = ctx.obj.get("context").broker
 
     balances, pnl, account_history = await load_and_spin(
         asyncio.gather(
@@ -81,8 +81,7 @@ async def account(ctx, plot):
 @click.option("-p", "--plot")
 @asink
 async def returns(plot):
-
-    broker = br.Tradier("6YA05267", access_token="ey39F8VMeFvhNsq4vavzeQXThcpL")
+    broker = ctx.obj.get("context").broker
 
     since = date(year=date.today().year, month=1, day=1)
 
@@ -113,7 +112,6 @@ async def returns(plot):
 
 @account.command(name="new")
 def new_account():
-
     home_dir = os.environ["HOME"]
 
     account_name = click.prompt("Account name")

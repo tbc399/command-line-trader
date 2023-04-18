@@ -16,7 +16,6 @@ def position():
 
 async def _wait_for_pending_orders(pending_order_ids, broker):
     while pending_order_ids:
-
         await asyncio.sleep(0.5)
 
         orders: Collection[br.Order] = await asyncio.gather(
@@ -42,10 +41,10 @@ async def _wait_for_pending_orders(pending_order_ids, broker):
 
 
 @position.command(name="list")
+@click.pass_context
 @asink
-async def list_():
-
-    broker = br.Tradier("6YA05267", access_token="ey39F8VMeFvhNsq4vavzeQXThcpL")
+async def list_(ctx):
+    broker = ctx.obj.get("context").broker
 
     positions, account_ = await load_and_spin(
         asyncio.gather(broker.positions, broker.account_balance), "loading", persist=False
@@ -92,16 +91,7 @@ async def list_():
     click.echo()
 
 
-@position.command()
-@click.argument("name")  # , nargs=-1)
-@click.option("-a", "--allocation", type=click.IntRange(1, 100), default=2)
-@click.option("-s", "--stop-loss", type=click.IntRange(1, 50), default=None)
-@click.option("-p", "--preview/--no-preview", default=False)
-@asink
-async def enter(name, allocation, stop_loss, preview):
-
-    broker = br.Tradier("6YA05267", access_token="ey39F8VMeFvhNsq4vavzeQXThcpL")
-
+async def enter_(broker, name, allocation, stop_loss, preview):
     balances, quote, positions = await asyncio.gather(
         broker.account_balance, broker.get_quote(name), broker.positions
     )
@@ -154,14 +144,19 @@ async def enter(name, allocation, stop_loss, preview):
         await broker.place_stop_loss(name, order.executed_quantity, round(stop_price, 2))
 
 
-@position.command(name="exit")
-@click.argument("name", required=False)
-# @click.option('-a', '--all', is_flag=True, name='all_')
+@position.command()
+@click.argument("name")  # , nargs=-1)
+@click.option("-a", "--allocation", type=click.IntRange(1, 100), default=2)
+@click.option("-s", "--stop-loss", type=click.IntRange(1, 50), default=None)
+@click.option("-p", "--preview/--no-preview", default=False)
+@click.pass_context
 @asink
-async def exit_(name: str):
+async def enter(ctx, name, allocation, stop_loss, preview):
+    broker = ctx.obj.get("context").broker
+    await enter_(broker, name, allocation, stop_loss, preview)
 
-    broker = br.Tradier("6YA05267", access_token="ey39F8VMeFvhNsq4vavzeQXThcpL")
 
+async def exit_(broker, name: str):
     orders, positions = await load_and_spin(
         asyncio.gather(broker.orders, broker.positions), "checking", persist=False
     )
@@ -187,10 +182,21 @@ async def exit_(name: str):
     )
 
 
-@position.command()
+@position.command(name="exit")
+@click.argument("name", required=False)
+# @click.option('-a', '--all', is_flag=True, name='all_')
+@click.pass_context
 @asink
-async def history():
-    broker = br.Tradier("6YA05267", access_token="ey39F8VMeFvhNsq4vavzeQXThcpL")
+async def exit_command(ctx, name: str):
+    broker = ctx.obj.get("context").broker
+    await exit_(broker, name)
+
+
+@position.command()
+@click.pass_context
+@asink
+async def history(ctx):
+    broker = ctx.obj.get("context").broker
 
     since = date(year=date.today().year, month=1, day=1)
 

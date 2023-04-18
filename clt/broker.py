@@ -115,7 +115,6 @@ class ReturnStream:
         closed_positions: List[ClosedPosition],
         admin_adjustments: List[Tuple[datetime, float]],
     ):
-
         self._initial = initial
 
         position_gains = [(x.time_closed, x.proceeds - x.cost_basis) for x in closed_positions]
@@ -207,19 +206,17 @@ class Broker(ABC):
 
 class Tradier(Broker):
     def __init__(self, account_number: str, **kwargs):
-
         super().__init__(account_number)
 
         access_token = kwargs.get("access_token")
         if access_token is None:
             raise ValueError("must have an access token to instantiate Tradier broker")
-        
-        self._api_env = kwargs.get('env', 'api') # can also be 'sandbox'
+
+        self._api_env = kwargs.get("env", "api")  # can also be 'sandbox'
 
         self._headers = dict(Accept="application/json", Authorization=f"Bearer {access_token}")
 
     def _form_url(self, endpoint):
-
         tradier_api_url = f"{self._api_env}.tradier.com"
         tradier_api_version = "v1"
 
@@ -241,7 +238,6 @@ class Tradier(Broker):
         order_type: str = "market",
         stop_price: float = None,
     ) -> str:
-
         payload = {
             "class": "equity",
             "symbol": name,
@@ -280,7 +276,6 @@ class Tradier(Broker):
 
     @property
     async def account_balance(self) -> AccountBalance:
-
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 url=self._form_url("/accounts/[[account]]/balances/"), headers=self._headers
@@ -300,12 +295,13 @@ class Tradier(Broker):
             total_equity=balances["total_equity"],
             open_pl=balances["open_pl"],
             long_value=balances["long_market_value"],
-            settled_cash=balances["cash"]["cash_available"],
+            settled_cash=balances["cash"]["cash_available"]
+            if balances["account_type"] == "cash"
+            else None,
         )
 
     @property
     async def positions(self) -> List[Position]:
-
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 url=self._form_url("/accounts/[[account]]/positions/"), headers=self._headers
@@ -324,7 +320,6 @@ class Tradier(Broker):
         positions = response.json()["positions"]["position"]
 
         if isinstance(positions, list):
-
             return [
                 Position(
                     name=pos["symbol"],
@@ -336,7 +331,6 @@ class Tradier(Broker):
             ]
 
         else:
-
             print(positions)
 
             return [
@@ -351,12 +345,10 @@ class Tradier(Broker):
             ]
 
     async def get_quote(self, name: str) -> Quote:
-
         quotes = await self.get_quotes([name])
         return quotes[0]
 
     async def get_quotes(self, names: Collection[str]) -> List[Quote]:
-
         if not names:
             return []
 
@@ -381,7 +373,6 @@ class Tradier(Broker):
             return [Quote(name=quotes["symbol"], price=float(quotes["last"]))]
 
     async def order_status(self, order_id: str) -> Order:
-
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 url=self._form_url(f"/accounts/[[account]]/orders/{order_id}"),
@@ -409,7 +400,6 @@ class Tradier(Broker):
 
     @property
     async def orders(self) -> Collection[Order]:
-
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 url=self._form_url(f"/accounts/[[account]]/orders"), headers=self._headers
@@ -444,7 +434,6 @@ class Tradier(Broker):
         ]
 
     async def cancel_order(self, order_id):
-
         async with httpx.AsyncClient() as client:
             response = await client.delete(
                 url=self._form_url(f"/accounts/[[account]]/orders/{order_id}"),
@@ -458,7 +447,6 @@ class Tradier(Broker):
             )
 
     async def account_pnl(self, since_date: date = None) -> List[ClosedPosition]:
-
         if since_date is None:
             params_ = None
         else:
@@ -495,7 +483,6 @@ class Tradier(Broker):
         return closed_positions
 
     async def account_history(self):
-
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 url=self._form_url("/accounts/[[account]]/history/"),
@@ -533,7 +520,6 @@ class Tradier(Broker):
         return actions
 
     async def calendar(self) -> List[MarketDay]:
-
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 url=self._form_url("/markets/calendar/"), headers=self._headers
