@@ -40,6 +40,7 @@ calendar = get_calendar("NYSE")
 
 # period over which to calculate momentum
 look_back_period = 130  # roughly about 4 days of 15min bars
+portfolio_size = 20
 
 
 def session_subtract(session, n):
@@ -49,7 +50,7 @@ def session_subtract(session, n):
     return session
 
 
-async def fetch_symbols(today, broker, position_size):
+async def fetch_symbols(today, broker, allocation):
     # filter on types of symbols
     desirable_characters = string.ascii_letters + string.digits
     last_session = calendar.previous_session(today).date()
@@ -82,8 +83,8 @@ async def fetch_symbols(today, broker, position_size):
     daily_prices = await asyncio.gather(*tasks)
 
     balance = await broker.account_balance
-    total_value = balance.long_value + balance.total_cash
-    max_price = total_value * position_size
+    account_base = balance.total_equity - balance.open_pl
+    max_price = account_base * allocation
 
     # TODO: filter for price that makes sense
     # TODO: switch this to percentage later
@@ -92,12 +93,10 @@ async def fetch_symbols(today, broker, position_size):
         key=itemgetter("volume"),
     )[-3000:]
 
-    return symbols
+    return high_volumes_symbols
 
 
 async def rebalance(broker, today, symbols):
-    portfolio_size = 20  # break out to config
-
     last_session = calendar.previous_session(today)
 
     # Fetch price data for each name
@@ -106,9 +105,9 @@ async def rebalance(broker, today, symbols):
             resp = await client.get(
                 f"https://api.tiingo.com/iex/{symbol}/prices",
                 params={
-                    "resampleFreq": "5min",
+                    "resampleFreq": "15min",
                     "columns": "date,close,volume",
-                    "startDate": str(session_subtract(last_session, 3).date()),
+                    "startDate": str(session_subtract(last_session, 5).date()),
                 },
                 headers={"Authorization": f"Token {tiingo_token}"},
             )
@@ -165,7 +164,8 @@ async def run(ctx):
 
     # Need to grab symbols here to initialize
     symbols = []
-    cache_refresh_date = Timestamp.today()  # check this will work with other tz times
+    last_symbol_refresh = Timestamp.today().date()  # check this will work with other tz times
+    last_rebalance = Timestamp.today().date() - timedelta(days=1)
 
     while True:
         await asyncio.sleep(5)
@@ -183,9 +183,12 @@ async def run(ctx):
         if first_minute <= now < last_minute:
             # market is open
             # rebalance everyday at noon
-            if now.hour == 12:  # TODO need to make sure this only hits once
-                await rebalance(broker, today, symbols)
+            if now.hour == 12:
+                if last_rebalance < today:
+                    await rebalance(broker, today, symbols)
+                    last_rebalance = today
         elif now < first_minute:
             # update the symbols list
-            if not symbols or cache_refresh_date < today:
-                symbols = await fetch_symbols(today, broker)
+            if not symbols or last_symbol_refresh < today:
+                symbols = await fetch_symbols(today, broker, portfolio_size)
+                last_symbol_refresh = today
