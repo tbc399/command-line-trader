@@ -8,6 +8,7 @@ Things to figure out:
  - Setup a rolling timeframe that would span multiple days
 3. Have to find some way to persist state across restarts potentially.
 4. Have to do a check against settled cash before buying new names
+5. Need to handle 429 too many requests per hour
 """
 
 import asyncio
@@ -48,6 +49,8 @@ async def fetch_symbols(today, broker, allocation):
     # filter on types of symbols
     desirable_characters = string.ascii_letters + string.digits
     last_session = calendar.previous_session(today).date()
+    # last_session = calendar.previous_session(today - timedelta(days=2)).date()
+    # today = Timestamp.utcnow().date() - timedelta(days=2)
 
     symbols = [
         x["ticker"]
@@ -59,33 +62,17 @@ async def fetch_symbols(today, broker, allocation):
         and all([y in desirable_characters for y in x["ticker"]])
     ]
 
-    # filter on volume and price
-    async def get_price(symbol):
-        async with httpx.AsyncClient() as client:
-            retries = 3
-            while retries > 0:
-                try:
-                    resp = await client.get(
-                        f"https://api.tiingo.com/tiingo/daily/{symbol}/prices",
-                        params={
-                            "columns": "date,close,volume",
-                            "startDate": last_session,
-                            "endDate": last_session,
-                        },
-                        headers={"Authorization": f"Token {tiingo_token}"},
-                        timeout=5,
-                    )
-                    print(f"Fetched daily prices for {symbol}")
-                    return symbol, resp.json()[0] if resp.json() else {}
-                except httpx.ConnectTimeout as error:
-                    retries -= 1
-            print(f"Failed to get daily price for {symbol}")
-            return symbol, {}
-
-    chunked_tasks = toolz.partition(1000, [get_price(symbol) for symbol in symbols])
-    daily_prices = []
-    for chunk in chunked_tasks:
-        daily_prices += await asyncio.gather(*chunk)
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"https://api.tiingo.com/tiingo/daily/prices",
+            headers={"Authorization": f"Token {tiingo_token}"},
+            timeout=5,
+        )
+        daily_prices = [
+            (item["ticker"].upper(), {"close": item["close"], "volume": item["volume"]})
+            for item in resp.json()
+            if item["ticker"].upper() in symbols
+        ]
 
     balance = await broker.account_balance
     account_base = balance.total_equity - balance.open_pl
@@ -96,12 +83,13 @@ async def fetch_symbols(today, broker, allocation):
     affordable_daily_prices = [
         (symbol, data) for symbol, data in daily_prices if data and data["close"] <= max_price
     ]
-    high_volume_filtered = sorted(affordable_daily_prices, key=lambda x: x[1]["volume"])[-3000:]
+    high_volume_filtered = sorted(affordable_daily_prices, key=lambda x: x[1]["volume"])[-1500:]
     return [symbol for symbol, _ in high_volume_filtered]
 
 
 async def rebalance(broker, today, symbols):
     last_session = calendar.previous_session(today)
+    # last_session = calendar.previous_session(today - timedelta(days=3))
 
     # Fetch price data for each name
     async def get_price(symbol):
@@ -119,29 +107,42 @@ async def rebalance(broker, today, symbols):
                         headers={"Authorization": f"Token {tiingo_token}"},
                         timeout=5,
                     )
+                    if resp.status_code == httpx.codes.TOO_MANY_REQUESTS:
+                        print("Hit request limit")
+                        return symbol, {}
                     return symbol, resp.json()
                 except httpx.ConnectTimeout as error:
                     retries -= 1
-                print(f"Failed to get prices for {symbol}")
-                return symbol, []
+            print(f"Failed to get minute prices for {symbol}")
+            return symbol, []
 
-    chunked_tasks = toolz.partition(500, [get_price(symbol) for symbol in symbols])
+    chunked_tasks = toolz.partition(300, [get_price(symbol) for symbol in symbols])
     minute_prices = []
     for chunk in chunked_tasks:
         minute_prices += await asyncio.gather(*chunk)
 
     # compute correlation and slope for each name
     momentum_quality = set()
+    r_values = []
     for symbol, data in minute_prices:
-        close_prices = [x["close"] for x in data[-look_back_period:]]
+        try:
+            close_prices = [x["close"] for x in data[-look_back_period:]]
+        except TypeError as error:
+            print(error)
+            continue
         rng = list(range(1, len(close_prices) + 1))
         try:
             r_value = correlation(rng, close_prices)
+            if r_value < 0.93:
+                continue  # only the highest quality
+            r_values.append((symbol, r_value))
         except Exception as e:
-            print(f"Error in computing correlation for {symbol}")
+            print(f"Error in computing correlation for {symbol}: {e}")
+            print(data)
             continue
         slope = linear_regression(rng, close_prices).slope
-        momentum_quality.add((symbol, slope * r_value**2))
+        # momentum_quality.add((symbol, slope * r_value**2))
+        momentum_quality.add((symbol, slope))
 
     # sort momentum quality
     top_ranked_momentum = [
@@ -159,10 +160,12 @@ async def rebalance(broker, today, symbols):
 
     # sell what needs to be sold
     for name in names_to_sell:
+        click.echo(f"attempting to close out {name}")
         await position.exit_(broker, name)
 
     # buy what needs to be bought if we have the settled cash to do so
     for name in names_to_buy:
+        click.echo(f"attempting to enter into {name}")
         await position.enter_(broker, name, (100 // portfolio_size), None, False)
 
 
@@ -173,16 +176,13 @@ async def run(ctx):
     broker = ctx.obj.get("context").broker
 
     # Need to grab symbols here to initialize
-    # symbols = await fetch_symbols(Timestamp.utcnow().date(), broker, portfolio_size)
-    symbols = []
+    symbols = await fetch_symbols(Timestamp.utcnow().date(), broker, portfolio_size)
     last_symbol_refresh = Timestamp.today().date()  # check this will work with other tz times
     last_rebalance = Timestamp.today().date() - timedelta(days=1)
 
     while True:
         now = Timestamp.utcnow()
         today = now.today().date()
-
-        click.echo(f"Holding {now.time()}")
 
         if not calendar.is_session(today):
             await asyncio.sleep(5)
@@ -192,15 +192,18 @@ async def run(ctx):
         first_minute = calendar.session_first_minute(today)
         last_minute = calendar.session_last_minute(today)
 
+        # await rebalance(broker, today, symbols)
+        # return
+
         if first_minute <= now < last_minute:
             # market is open
             # rebalance every day at noon
-            # if now.hour == 12 and now.minute == 0:
-            if last_rebalance < today:
-                click.echo("Rebalancing")
-                await rebalance(broker, today, symbols)
-                last_rebalance = today
-        elif now < first_minute:
+            if now.tz_convert("America/Chicago").hour == 12:
+                if last_rebalance < today:
+                    click.echo("Rebalancing")
+                    await rebalance(broker, today, symbols)
+                    last_rebalance = today
+        elif (first_minute - timedelta(minutes=10)) < now < first_minute:
             # update the symbols list
             if not symbols or last_symbol_refresh < today:
                 click.echo("Refreshing symbols list")

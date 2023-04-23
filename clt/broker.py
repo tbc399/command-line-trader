@@ -512,12 +512,13 @@ class Tradier(Broker):
                 f"with a status code of {response.status_code}: {response.text}"
             )
 
-        actions = [
-            AccountAction(type=action["type"], amount=action["amount"], date=action["date"])
-            for action in response.json()["history"]["event"]
-        ]
+        # actions = [
+        #     AccountAction(type=action["type"], amount=action["amount"], date=action["date"])
+        #     for action in response.json()["history"]["event"]
+        # ]
 
-        return actions
+        # return actions
+        return []
 
     async def calendar(self) -> List[MarketDay]:
         async with httpx.AsyncClient() as client:
