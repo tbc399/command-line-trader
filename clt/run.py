@@ -199,7 +199,7 @@ async def run(ctx):
         if first_minute <= now < last_minute:
             # market is open
             # rebalance every day at noon
-            if now.tz_convert("America/Chicago").hour == 9:
+            if now.tz_convert("America/Chicago").hour == 12:
                 if last_rebalance < today:
                     click.echo("Rebalancing")
                     await rebalance(broker, today, symbols)
