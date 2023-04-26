@@ -36,6 +36,7 @@ calendar = get_calendar("NYSE")
 # period over which to calculate momentum
 look_back_period = 130  # roughly about 4 days of 15min bars
 portfolio_size = 25  # target portfolio size
+quality_threshold = 0.93  # looking for r values gte this
 
 
 def session_subtract(session, n):
@@ -83,7 +84,7 @@ async def fetch_symbols(today, broker, allocation):
     affordable_daily_prices = [
         (symbol, data) for symbol, data in daily_prices if data and data["close"] <= max_price
     ]
-    high_volume_filtered = sorted(affordable_daily_prices, key=lambda x: x[1]["volume"])[-1500:]
+    high_volume_filtered = sorted(affordable_daily_prices, key=lambda x: x[1]["volume"])[-4000:]
     return [symbol for symbol, _ in high_volume_filtered]
 
 
@@ -133,7 +134,7 @@ async def rebalance(broker, today, symbols):
         rng = list(range(1, len(close_prices) + 1))
         try:
             r_value = correlation(rng, close_prices)
-            if r_value < 0.93:
+            if r_value < quality_threshold:
                 continue  # only the highest quality
             r_values.append((symbol, r_value))
         except Exception as e:
@@ -198,7 +199,7 @@ async def run(ctx):
         if first_minute <= now < last_minute:
             # market is open
             # rebalance every day at noon
-            if now.tz_convert("America/Chicago").hour == 12:
+            if now.tz_convert("America/Chicago").hour == 9:
                 if last_rebalance < today:
                     click.echo("Rebalancing")
                     await rebalance(broker, today, symbols)

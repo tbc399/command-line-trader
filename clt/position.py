@@ -171,10 +171,11 @@ async def exit_(broker, name: str):
         if order.status == br.OrderStatus.OPEN and order.name.lower() == name.lower()
     ]
 
-    await load_and_spin(
-        asyncio.gather(*[broker.cancel_order(order.id) for order in open_orders]),
-        "cancelling open orders",
-    )
+    if open_orders:
+        await load_and_spin(
+            asyncio.gather(*[broker.cancel_order(order.id) for order in open_orders]),
+            "cancelling open orders",
+        )
 
     pos = [x for x in positions if x == name][0]
     await load_and_spin(

@@ -331,8 +331,6 @@ class Tradier(Broker):
             ]
 
         else:
-            print(positions)
-
             return [
                 Position(
                     name=positions["symbol"],
