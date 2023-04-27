@@ -114,13 +114,16 @@ async def rebalance(broker, today, symbols):
                     return symbol, resp.json()
                 except httpx.ConnectTimeout as error:
                     retries -= 1
+                except httpx.ReadTimeout as error2:
+                    retries -= 1
             print(f"Failed to get minute prices for {symbol}")
             return symbol, []
 
-    chunked_tasks = toolz.partition(300, [get_price(symbol) for symbol in symbols])
+    chunked_tasks = toolz.partition(100, [get_price(symbol) for symbol in symbols])
     minute_prices = []
     for chunk in chunked_tasks:
         minute_prices += await asyncio.gather(*chunk)
+        await asyncio.sleep(2)
 
     # compute correlation and slope for each name
     momentum_quality = set()
