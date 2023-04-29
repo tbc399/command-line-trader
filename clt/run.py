@@ -9,6 +9,8 @@ Things to figure out:
 3. Have to find some way to persist state across restarts potentially.
 4. Have to do a check against settled cash before buying new names
 5. Need to handle 429 too many requests per hour
+6. and in tenacity for retries
+7. Filter on volume so that we don't try to put in a position that's bigger than what's available
 """
 
 import asyncio
@@ -23,6 +25,7 @@ import toolz
 from dateutil import parser
 from exchange_calendars import get_calendar
 from pandas import Timestamp
+from tenacity import AsyncRetrying, RetryError, stop_after_attempt
 from tiingo import TiingoClient
 
 from clt import position
@@ -64,11 +67,13 @@ async def fetch_symbols(today, broker, allocation):
     ]
 
     async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"https://api.tiingo.com/tiingo/daily/prices",
-            headers={"Authorization": f"Token {tiingo_token}"},
-            timeout=5,
-        )
+        async for attempt in AsyncRetrying(stop=stop_after_attempt(3)):
+            with attempt:
+                resp = await client.get(
+                    f"https://api.tiingo.com/tiingo/daily/prices",
+                    headers={"Authorization": f"Token {tiingo_token}"},
+                    timeout=5,
+                )
         daily_prices = [
             (item["ticker"].upper(), {"close": item["close"], "volume": item["volume"]})
             for item in resp.json()
@@ -95,31 +100,28 @@ async def rebalance(broker, today, symbols):
     # Fetch price data for each name
     async def get_price(symbol):
         async with httpx.AsyncClient() as client:
-            retries = 3
-            while retries > 0:
-                try:
-                    resp = await client.get(
-                        f"https://api.tiingo.com/iex/{symbol}/prices",
-                        params={
-                            "resampleFreq": "15min",
-                            "columns": "date,close,volume",
-                            "startDate": str(session_subtract(last_session, 4).date()),
-                        },
-                        headers={"Authorization": f"Token {tiingo_token}"},
-                        timeout=5,
-                    )
-                    if resp.status_code == httpx.codes.TOO_MANY_REQUESTS:
-                        print("Hit request limit")
-                        return symbol, {}
-                    return symbol, resp.json()
-                except httpx.ConnectTimeout as error:
-                    retries -= 1
-                except httpx.ReadTimeout as error2:
-                    retries -= 1
-            print(f"Failed to get minute prices for {symbol}")
-            return symbol, []
+            try:
+                async for attempt in AsyncRetrying(stop=stop_after_attempt(3)):
+                    with attempt:
+                        resp = await client.get(
+                            f"https://api.tiingo.com/iex/{symbol}/prices",
+                            params={
+                                "resampleFreq": "15min",
+                                "columns": "date,close,volume",
+                                "startDate": str(session_subtract(last_session, 4).date()),
+                            },
+                            headers={"Authorization": f"Token {tiingo_token}"},
+                            timeout=5,
+                        )
+                        if resp.status_code == httpx.codes.TOO_MANY_REQUESTS:
+                            print("Hit request limit")
+                            return symbol, {}
+                        return symbol, resp.json()
+            except RetryError:
+                print(f"Failed to get minute prices for {symbol}")
+                return symbol, []
 
-    chunked_tasks = toolz.partition(100, [get_price(symbol) for symbol in symbols])
+    chunked_tasks = toolz.partition(300, [get_price(symbol) for symbol in symbols])
     minute_prices = []
     for chunk in chunked_tasks:
         minute_prices += await asyncio.gather(*chunk)
@@ -202,7 +204,7 @@ async def run(ctx):
         if first_minute <= now < last_minute:
             # market is open
             # rebalance every day at noon
-            if now.tz_convert("America/Chicago").hour == 12:
+            if now.tz_convert("America/Chicago").hour == 13:
                 if last_rebalance < today:
                     click.echo("Rebalancing")
                     await rebalance(broker, today, symbols)

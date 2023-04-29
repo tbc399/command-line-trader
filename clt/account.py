@@ -79,8 +79,9 @@ async def account(ctx, plot):
 
 @account.command()
 @click.option("-p", "--plot")
+@click.pass_context
 @asink
-async def returns(plot):
+async def returns(ctx, plot):
     broker = ctx.obj.get("context").broker
 
     since = date(year=date.today().year, month=1, day=1)

@@ -21,6 +21,7 @@ tiingo = "^0.14.0"
 exchange-calendars = "^4.2.6"
 black = "^23.3.0"
 isort = "^5.12.0"
+tenacity = "^8.2.2"
 
 [tool.black]
 line-length = 100

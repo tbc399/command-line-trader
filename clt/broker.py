@@ -1,14 +1,14 @@
-import asyncio
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from enum import Enum
 from typing import Collection, List, Tuple
 
+import click
 import httpx
-import pandas
 from httpx import codes
 from pydantic import BaseModel
+from tenacity import AsyncRetrying, stop_after_attempt
 
 
 class Position(BaseModel):
@@ -251,11 +251,14 @@ class Tradier(Broker):
             payload["stop"] = stop_price
 
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url=self._form_url("/accounts/[[account]]/orders"),
-                data=payload,
-                headers=self._headers,
-            )
+            async for attempt in AsyncRetrying(stop=stop_after_attempt(4)):
+                with attempt:
+                    response = await client.post(
+                        url=self._form_url("/accounts/[[account]]/orders"),
+                        data=payload,
+                        headers=self._headers,
+                    )
+                    x = response
 
         if response.status_code != codes.OK:
             raise IOError(
@@ -277,9 +280,11 @@ class Tradier(Broker):
     @property
     async def account_balance(self) -> AccountBalance:
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url=self._form_url("/accounts/[[account]]/balances/"), headers=self._headers
-            )
+            async for attempt in AsyncRetrying(stop=stop_after_attempt(4)):
+                with attempt:
+                    response = await client.get(
+                        url=self._form_url("/accounts/[[account]]/balances/"), headers=self._headers
+                    )
 
         if response.status_code != httpx.codes.OK:
             raise IOError(
@@ -303,9 +308,12 @@ class Tradier(Broker):
     @property
     async def positions(self) -> List[Position]:
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url=self._form_url("/accounts/[[account]]/positions/"), headers=self._headers
-            )
+            async for attempt in AsyncRetrying(stop=stop_after_attempt(4)):
+                with attempt:
+                    response = await client.get(
+                        url=self._form_url("/accounts/[[account]]/positions/"),
+                        headers=self._headers,
+                    )
 
         if response.status_code != httpx.codes.OK:
             raise IOError(
@@ -351,11 +359,13 @@ class Tradier(Broker):
             return []
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url=self._form_url("/markets/quotes/"),
-                params=dict(symbols=",".join(names), greeks=False),
-                headers=self._headers,
-            )
+            async for attempt in AsyncRetrying(stop=stop_after_attempt(4)):
+                with attempt:
+                    response = await client.get(
+                        url=self._form_url("/markets/quotes/"),
+                        params=dict(symbols=",".join(names), greeks=False),
+                        headers=self._headers,
+                    )
 
         if response.status_code != codes.OK:
             raise IOError(
@@ -372,10 +382,12 @@ class Tradier(Broker):
 
     async def order_status(self, order_id: str) -> Order:
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url=self._form_url(f"/accounts/[[account]]/orders/{order_id}"),
-                headers=self._headers,
-            )
+            async for attempt in AsyncRetrying(stop=stop_after_attempt(4)):
+                with attempt:
+                    response = await client.get(
+                        url=self._form_url(f"/accounts/[[account]]/orders/{order_id}"),
+                        headers=self._headers,
+                    )
 
         if response.status_code != httpx.codes.OK:
             raise IOError(
@@ -399,9 +411,11 @@ class Tradier(Broker):
     @property
     async def orders(self) -> Collection[Order]:
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url=self._form_url(f"/accounts/[[account]]/orders"), headers=self._headers
-            )
+            async for attempt in AsyncRetrying(stop=stop_after_attempt(4)):
+                with attempt:
+                    response = await client.get(
+                        url=self._form_url(f"/accounts/[[account]]/orders"), headers=self._headers
+                    )
 
         if response.status_code != httpx.codes.OK:
             raise IOError(
@@ -433,10 +447,12 @@ class Tradier(Broker):
 
     async def cancel_order(self, order_id):
         async with httpx.AsyncClient() as client:
-            response = await client.delete(
-                url=self._form_url(f"/accounts/[[account]]/orders/{order_id}"),
-                headers=self._headers,
-            )
+            async for attempt in AsyncRetrying(stop=stop_after_attempt(4)):
+                with attempt:
+                    response = await client.delete(
+                        url=self._form_url(f"/accounts/[[account]]/orders/{order_id}"),
+                        headers=self._headers,
+                    )
 
         if response.status_code != httpx.codes.OK:
             raise IOError(
@@ -451,11 +467,13 @@ class Tradier(Broker):
             params_ = {"start": since_date.strftime("%Y-%m-%d")}
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url=self._form_url("/accounts/[[account]]/gainloss"),
-                params=params_,
-                headers=self._headers,
-            )
+            async for attempt in AsyncRetrying(stop=stop_after_attempt(4)):
+                with attempt:
+                    response = await client.get(
+                        url=self._form_url("/accounts/[[account]]/gainloss"),
+                        params=params_,
+                        headers=self._headers,
+                    )
 
         if response.status_code != codes.OK:
             raise IOError(
@@ -482,28 +500,31 @@ class Tradier(Broker):
 
     async def account_history(self):
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url=self._form_url("/accounts/[[account]]/history/"),
-                params=dict(
-                    limit=10000,
-                    type=",".join(
-                        (
-                            "ach",
-                            "wire",
-                            "dividend",
-                            "fee",
-                            "tax",
-                            "journal",
-                            "check",
-                            "transfer",
-                            "adjustment",
-                            "interest",
-                        )
-                    ),
-                ),
-                headers=self._headers,
-            )
+            async for attempt in AsyncRetrying(stop=stop_after_attempt(4)):
+                with attempt:
+                    response = await client.get(
+                        url=self._form_url("/accounts/[[account]]/history/"),
+                        params=dict(
+                            limit=10000,
+                            type=",".join(
+                                (
+                                    "ach",
+                                    "wire",
+                                    "dividend",
+                                    "fee",
+                                    "tax",
+                                    "journal",
+                                    "check",
+                                    "transfer",
+                                    "adjustment",
+                                    "interest",
+                                )
+                            ),
+                        ),
+                        headers=self._headers,
+                    )
 
+        click.echo(response.json())
         if response.status_code != codes.OK:
             raise IOError(
                 f"failed to get account history from Tradier "
@@ -520,9 +541,11 @@ class Tradier(Broker):
 
     async def calendar(self) -> List[MarketDay]:
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url=self._form_url("/markets/calendar/"), headers=self._headers
-            )
+            async for attempt in AsyncRetrying(stop=stop_after_attempt(4)):
+                with attempt:
+                    response = await client.get(
+                        url=self._form_url("/markets/calendar/"), headers=self._headers
+                    )
 
         if response.status_code != codes.OK:
             raise IOError(

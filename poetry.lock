@@ -683,6 +683,21 @@ files = [
 widechars = ["wcwidth"]
 
 [[package]]
+name = "tenacity"
+version = "8.2.2"
+description = "Retry code until it succeeds"
+category = "main"
+optional = false
+python-versions = ">=3.6"
+files = [
+    {file = "tenacity-8.2.2-py3-none-any.whl", hash = "sha256:2f277afb21b851637e8f52e6a613ff08734c347dc19ade928e519d7d2d8569b0"},
+    {file = "tenacity-8.2.2.tar.gz", hash = "sha256:43af037822bd0029025877f3b2d97cc4d7bb0c2991000a3d59d71517c5c969e0"},
+]
+
+[package.extras]
+doc = ["reno", "sphinx", "tornado (>=4.5)"]
+
+[[package]]
 name = "tiingo"
 version = "0.14.0"
 description = "REST Client for Tiingo Data Platform API"
@@ -768,4 +783,4 @@ socks = ["PySocks (>=1.5.6,!=1.5.7,<2.0)"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "af8cbb7ff8442ee1d74bf1d4daa181b4d3b952c74ff2ba40981f4572327b6b02"
+content-hash = "4ea9c01f53956a54abd124db7e50b558a5317e87db8cf1fd8a3a57ce405c6013"
