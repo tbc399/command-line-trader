@@ -300,7 +300,7 @@ class Tradier(Broker):
             total_equity=balances["total_equity"],
             open_pl=balances["open_pl"],
             long_value=balances["long_market_value"],
-            settled_cash=balances["cash"]["cash_available"]
+            settled_cash=float(balances["cash"]["cash_available"]) - float(balances["cash"]["unsettled_funds"])
             if balances["account_type"] == "cash"
             else None,
         )
@@ -499,6 +499,7 @@ class Tradier(Broker):
         return closed_positions
 
     async def account_history(self):
+        return []
         async with httpx.AsyncClient() as client:
             async for attempt in AsyncRetrying(stop=stop_after_attempt(4)):
                 with attempt:
@@ -524,7 +525,7 @@ class Tradier(Broker):
                         headers=self._headers,
                     )
 
-        click.echo(response.json())
+        # click.echo(response.json())
         if response.status_code != codes.OK:
             raise IOError(
                 f"failed to get account history from Tradier "

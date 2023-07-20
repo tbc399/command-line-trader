@@ -60,6 +60,7 @@ async def account(ctx, plot):
                 [
                     balances.total_equity,
                     balances.long_value,
+                    balances.settled_cash,
                     green(open_pl_percentage)
                     if open_pl_percentage > 0
                     else red(open_pl_percentage),
@@ -68,6 +69,7 @@ async def account(ctx, plot):
             headers=[
                 f"Total Equity",
                 "Long Value",
+                "Settled Cash",
                 "Open P/L (%)",
             ],
             tablefmt="fancy_grid",

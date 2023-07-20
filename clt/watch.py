@@ -19,7 +19,10 @@ def add(ctx, name: str, notes: str):
     context: Context = ctx.obj["context"]
     watchlist: List[WatchlistItem] = context.watchlist
 
-    watchlist.append(WatchlistItem(name=name.upper(), notes=notes))
+    if name not in watchlist:
+        watchlist.append(WatchlistItem(name=name.upper(), notes=notes))
+    else:
+        click.echo(f"{name.upper()} is already being watched")
 
 
 @watch.command()
@@ -33,7 +36,7 @@ def remove(ctx, name: str):
     to_be_removed = None
 
     for x in watchlist:
-        if x.name == name:
+        if x.name.lower() == name.lower():
             to_be_removed = x
 
     if to_be_removed is not None:

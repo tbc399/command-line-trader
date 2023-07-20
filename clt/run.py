@@ -198,9 +198,6 @@ async def run(ctx):
         first_minute = calendar.session_first_minute(today)
         last_minute = calendar.session_last_minute(today)
 
-        # await rebalance(broker, today, symbols)
-        # return
-
         if first_minute <= now < last_minute:
             # market is open
             # rebalance every day at noon

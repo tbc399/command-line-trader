@@ -185,7 +185,6 @@ async def exit_(broker, name: str):
 
 @position.command(name="exit")
 @click.argument("name", required=False)
-# @click.option('-a', '--all', is_flag=True, name='all_')
 @click.pass_context
 @asink
 async def exit_command(ctx, name: str):
